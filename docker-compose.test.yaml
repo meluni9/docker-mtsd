@@ -1,0 +1,15 @@
+services:
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    networks:
+      - servers
+    depends_on:
+      - server1
+      - server2
+      - server3
+      - balancer
+
+  balancer:
+    command: ['lb', '--trace=true']
