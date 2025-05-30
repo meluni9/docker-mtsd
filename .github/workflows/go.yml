@@ -2,10 +2,10 @@ name: Go
 
 on:
   push:
-    branches: 'main'
+    branches: '*'
 
   pull_request:
-    branches: 'main'
+    branches: '*'
 
 jobs:
   build:
@@ -22,9 +22,9 @@ jobs:
 
       - name: Build Docker image and run unit tests
 
-        run: docker-compose build
+        run: docker compose build
 
       - name: Running integration test
 
         run: |
-          docker-compose -f docker-compose.yaml -f docker-compose.test.yaml up --exit-code-from test
+          docker compose -f docker-compose.yaml -f docker-compose.test.yaml up --exit-code-from test
