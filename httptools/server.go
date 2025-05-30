@@ -17,7 +17,7 @@ type server struct {
 
 func (s server) Start() {
 	go func() {
-		log.Println("Staring the HTTP server...")
+		log.Println("Starting the HTTP server...")
 		err := s.httpServer.ListenAndServe()
 		log.Fatalf("HTTP server finished: %s. Finishing the process.", err)
 	}()
