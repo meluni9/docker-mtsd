@@ -12,4 +12,13 @@ services:
       - balancer
 
   balancer:
-    command: ['lb', '--trace=true']
+    command:
+      [
+        'lb',
+        '--trace=true',
+        '--rate-limit=true',
+        '--rate-limit-requests=1000',
+        '--rate-limit-window=1m',
+        '--cache=true',
+        '--cache-ttl=5m',
+      ]
