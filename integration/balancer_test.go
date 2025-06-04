@@ -176,11 +176,278 @@ func TestURLStickyRouting(t *testing.T) {
 	}
 }
 
-func getFirstKey(m map[string]struct{}) string {
-	for k := range m {
-		return k
+func TestRateLimiting(t *testing.T) {
+	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
+		t.Skip("Integration test is not enabled")
 	}
-	return ""
+
+	// Test rate limiting by making many requests quickly
+	const requestCount = 20
+	const endpoint = "/api/v1/some-data"
+	
+	var rateLimitedCount int
+	var successCount int
+
+	for i := 0; i < requestCount; i++ {
+		resp, err := client.Get(baseAddress + endpoint)
+		if err != nil {
+			t.Errorf("Request %d failed: %v", i, err)
+			continue
+		}
+
+		switch resp.StatusCode {
+		case http.StatusOK:
+			successCount++
+			// Check rate limit headers
+			if limit := resp.Header.Get("X-RateLimit-Limit"); limit == "" {
+				t.Error("Expected X-RateLimit-Limit header on successful request")
+			}
+			if remaining := resp.Header.Get("X-RateLimit-Remaining"); remaining == "" {
+				t.Error("Expected X-RateLimit-Remaining header on successful request")
+			}
+		case http.StatusTooManyRequests:
+			rateLimitedCount++
+			// Check rate limit headers for rate limited requests
+			if retryAfter := resp.Header.Get("Retry-After"); retryAfter == "" {
+				t.Error("Expected Retry-After header on rate limited request")
+			}
+			if reset := resp.Header.Get("X-RateLimit-Reset"); reset == "" {
+				t.Error("Expected X-RateLimit-Reset header on rate limited request")
+			}
+		default:
+			t.Errorf("Unexpected status code: %d", resp.StatusCode)
+		}
+
+		resp.Body.Close()
+	}
+
+	t.Logf("Successful requests: %d, Rate limited: %d", successCount, rateLimitedCount)
+	
+	// We expect some requests to be rate limited if we're hitting the limit
+	if successCount == requestCount {
+		t.Log("Warning: No rate limiting occurred - may need to adjust limits for testing")
+	}
+}
+
+func TestCaching(t *testing.T) {
+	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
+		t.Skip("Integration test is not enabled")
+	}
+
+	const endpoint = "/api/v1/some-data"
+	url := baseAddress + endpoint
+
+	// First request should be a cache miss
+	resp1, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("First request failed: %v", err)
+	}
+	defer resp1.Body.Close()
+
+	if resp1.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", resp1.StatusCode)
+	}
+
+	cacheStatus1 := resp1.Header.Get("X-Cache")
+	if cacheStatus1 != "MISS" {
+		t.Errorf("Expected X-Cache: MISS for first request, got %s", cacheStatus1)
+	}
+
+	// Second request should be a cache hit
+	resp2, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("Second request failed: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", resp2.StatusCode)
+	}
+
+	cacheStatus2 := resp2.Header.Get("X-Cache")
+	if cacheStatus2 != "HIT" {
+		t.Errorf("Expected X-Cache: HIT for second request, got %s", cacheStatus2)
+	}
+
+	// Check cache TTL header
+	if ttl := resp2.Header.Get("X-Cache-TTL"); ttl == "" {
+		t.Error("Expected X-Cache-TTL header on cache hit")
+	}
+
+	// Check Age header
+	if age := resp2.Header.Get("Age"); age == "" {
+		t.Error("Expected Age header on cache hit")
+	}
+
+	t.Logf("Cache test passed - first request: %s, second request: %s", cacheStatus1, cacheStatus2)
+}
+
+func TestStatsEndpoint(t *testing.T) {
+	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
+		t.Skip("Integration test is not enabled")
+	}
+
+	resp, err := client.Get(baseAddress + "/stats")
+	if err != nil {
+		t.Fatalf("Stats request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200 for stats endpoint, got %d", resp.StatusCode)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "application/json" {
+		t.Errorf("Expected Content-Type: application/json, got %s", contentType)
+	}
+
+	t.Log("Stats endpoint is accessible and returns JSON")
+}
+
+func TestCacheClearEndpoint(t *testing.T) {
+	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
+		t.Skip("Integration test is not enabled")
+	}
+
+	// First, make a request to populate cache
+	endpoint := "/api/v1/some-data-check1"
+	resp1, err := client.Get(baseAddress + endpoint)
+	if err != nil {
+		t.Fatalf("Initial request failed: %v", err)
+	}
+	resp1.Body.Close()
+
+	// Verify it's cached
+	resp2, err := client.Get(baseAddress + endpoint)
+	if err != nil {
+		t.Fatalf("Second request failed: %v", err)
+	}
+	resp2.Body.Close()
+
+	if resp2.Header.Get("X-Cache") != "HIT" {
+		t.Error("Expected cache hit before clearing")
+	}
+
+	// Clear cache
+	req, _ := http.NewRequest("POST", baseAddress+"/cache/clear", nil)
+	resp3, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Cache clear request failed: %v", err)
+	}
+	defer resp3.Body.Close()
+
+	if resp3.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200 for cache clear, got %d", resp3.StatusCode)
+	}
+
+	// Next request should be cache miss
+	resp4, err := client.Get(baseAddress + endpoint)
+	if err != nil {
+		t.Fatalf("Request after cache clear failed: %v", err)
+	}
+	defer resp4.Body.Close()
+
+	if resp4.Header.Get("X-Cache") != "MISS" {
+		t.Error("Expected cache miss after clearing cache")
+	}
+
+	t.Log("Cache clear endpoint works correctly")
+}
+
+func TestRateLimitRecovery(t *testing.T) {
+	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
+		t.Skip("Integration test is not enabled")
+	}
+
+	const endpoint = "/api/v1/some-data-check2"
+	
+	// Make requests until rate limited
+	var lastResp *http.Response
+	var err error
+	
+	for i := 0; i < 200; i++ { // Make enough requests to trigger rate limiting
+		lastResp, err = client.Get(baseAddress + endpoint)
+		if err != nil {
+			t.Fatalf("Request %d failed: %v", i, err)
+		}
+		
+		if lastResp.StatusCode == http.StatusTooManyRequests {
+			t.Logf("Rate limited after %d requests", i+1)
+			break
+		}
+		lastResp.Body.Close()
+	}
+
+	if lastResp == nil || lastResp.StatusCode != http.StatusTooManyRequests {
+		t.Skip("Could not trigger rate limiting within 200 requests")
+	}
+
+	// Check Retry-After header
+	retryAfter := lastResp.Header.Get("Retry-After")
+	if retryAfter == "" {
+		t.Error("Expected Retry-After header on rate limited response")
+	}
+	lastResp.Body.Close()
+
+	t.Logf("Rate limiting triggered, Retry-After: %s seconds", retryAfter)
+	
+	// Wait a bit and try again (for a real test, you'd wait the full retry-after time)
+	time.Sleep(2 * time.Second)
+	
+	resp, err := client.Get(baseAddress + endpoint)
+	if err != nil {
+		t.Fatalf("Request after wait failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// We might still be rate limited, but the endpoint should respond properly
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("Expected status 200 or 429 after wait, got %d", resp.StatusCode)
+	}
+}
+
+func TestCacheWithDifferentEndpoints(t *testing.T) {
+	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
+		t.Skip("Integration test is not enabled")
+	}
+
+	endpoints := []string{
+		"/api/v1/some-data",
+		"/api/v1/some-data-check1",
+		"/api/v1/some-data-check2",
+		"/api/v1/some-data-check3",
+	}
+
+	// Make first requests to all endpoints (should be cache misses)
+	for _, endpoint := range endpoints {
+		resp, err := client.Get(baseAddress + endpoint)
+		if err != nil {
+			t.Errorf("Request to %s failed: %v", endpoint, err)
+			continue
+		}
+
+		if resp.Header.Get("X-Cache") != "MISS" {
+			t.Errorf("Expected cache miss for first request to %s", endpoint)
+		}
+		resp.Body.Close()
+	}
+
+	// Make second requests to all endpoints (should be cache hits)
+	for _, endpoint := range endpoints {
+		resp, err := client.Get(baseAddress + endpoint)
+		if err != nil {
+			t.Errorf("Second request to %s failed: %v", endpoint, err)
+			continue
+		}
+
+		if resp.Header.Get("X-Cache") != "HIT" {
+			t.Errorf("Expected cache hit for second request to %s", endpoint)
+		}
+		resp.Body.Close()
+	}
+
+	t.Log("Cache working correctly for different endpoints")
 }
 
 func BenchmarkBalancer(b *testing.B) {
@@ -197,8 +464,14 @@ func BenchmarkBalancer(b *testing.B) {
 
 	serverCounts := make(map[string]int)
 	responseTimeTotal := time.Duration(0)
+	cacheHits := 0
+	cacheMisses := 0
+	rateLimited := 0
+	
 	var responseTimeMu sync.Mutex
 	var serverCountsMu sync.Mutex
+	var cacheMu sync.Mutex
+	var rateLimitMu sync.Mutex
 
 	b.ResetTimer()
 
@@ -220,6 +493,24 @@ func BenchmarkBalancer(b *testing.B) {
 			responseTimeTotal += elapsed
 			responseTimeMu.Unlock()
 
+			// Track cache performance
+			cacheStatus := resp.Header.Get("X-Cache")
+			cacheMu.Lock()
+			switch cacheStatus {
+			case "HIT":
+				cacheHits++
+			case "MISS":
+				cacheMisses++
+			}
+			cacheMu.Unlock()
+
+			// Track rate limiting
+			if resp.StatusCode == http.StatusTooManyRequests {
+				rateLimitMu.Lock()
+				rateLimited++
+				rateLimitMu.Unlock()
+			}
+
 			server := resp.Header.Get("lb-from")
 			if server != "" {
 				serverCountsMu.Lock()
@@ -235,10 +526,27 @@ func BenchmarkBalancer(b *testing.B) {
 	for _, count := range serverCounts {
 		totalRequests += count
 	}
+	totalRequests += rateLimited // Add rate limited requests to total
 
 	b.Logf("Total requests processed: %d", totalRequests)
-	b.Logf("Average response time: %v", responseTimeTotal/time.Duration(totalRequests))
+	if totalRequests > 0 {
+		b.Logf("Average response time: %v", responseTimeTotal/time.Duration(totalRequests))
+	}
 
+	// Cache statistics
+	totalCacheRequests := cacheHits + cacheMisses
+	if totalCacheRequests > 0 {
+		hitRate := float64(cacheHits) * 100 / float64(totalCacheRequests)
+		b.Logf("Cache hit rate: %.2f%% (%d hits, %d misses)", hitRate, cacheHits, cacheMisses)
+	}
+
+	// Rate limiting statistics
+	if rateLimited > 0 {
+		rateLimitRate := float64(rateLimited) * 100 / float64(totalRequests)
+		b.Logf("Rate limited requests: %d (%.2f%%)", rateLimited, rateLimitRate)
+	}
+
+	// Server distribution
 	var servers []string
 	for server := range serverCounts {
 		servers = append(servers, server)
@@ -246,10 +554,17 @@ func BenchmarkBalancer(b *testing.B) {
 	sort.Strings(servers)
 
 	for _, server := range servers {
-		percentage := float64(serverCounts[server]) * 100 / float64(totalRequests)
+		percentage := float64(serverCounts[server]) * 100 / float64(totalRequests-rateLimited)
 		b.Logf("Server %s handled %d requests (%.2f%%)",
 			server, serverCounts[server], percentage)
 	}
+}
+
+func getFirstKey(m map[string]struct{}) string {
+	for k := range m {
+		return k
+	}
+	return ""
 }
 
 func health(server string) bool {
