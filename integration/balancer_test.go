@@ -234,7 +234,8 @@ func TestCaching(t *testing.T) {
 		t.Skip("Integration test is not enabled")
 	}
 
-	const endpoint = "/api/v1/some-data"
+	// Use a unique endpoint for cache testing to avoid conflicts with other tests
+	endpoint := "/api/v1/some-data?cache_test=unique_" + fmt.Sprintf("%d", time.Now().UnixNano())
 	url := baseAddress + endpoint
 
 	// First request should be a cache miss
@@ -310,16 +311,16 @@ func TestCacheClearEndpoint(t *testing.T) {
 		t.Skip("Integration test is not enabled")
 	}
 
-	// First, make a request to populate cache
-	endpoint := "/api/v1/some-data-check1"
-	resp1, err := client.Get(baseAddress + endpoint)
+	// First, make a request to populate cache with a unique URL
+	uniqueEndpoint := "/api/v1/some-data-check1?cache_clear_test=" + fmt.Sprintf("%d", time.Now().UnixNano())
+	resp1, err := client.Get(baseAddress + uniqueEndpoint)
 	if err != nil {
 		t.Fatalf("Initial request failed: %v", err)
 	}
 	resp1.Body.Close()
 
 	// Verify it's cached
-	resp2, err := client.Get(baseAddress + endpoint)
+	resp2, err := client.Get(baseAddress + uniqueEndpoint)
 	if err != nil {
 		t.Fatalf("Second request failed: %v", err)
 	}
@@ -342,7 +343,7 @@ func TestCacheClearEndpoint(t *testing.T) {
 	}
 
 	// Next request should be cache miss
-	resp4, err := client.Get(baseAddress + endpoint)
+	resp4, err := client.Get(baseAddress + uniqueEndpoint)
 	if err != nil {
 		t.Fatalf("Request after cache clear failed: %v", err)
 	}
@@ -412,11 +413,13 @@ func TestCacheWithDifferentEndpoints(t *testing.T) {
 		t.Skip("Integration test is not enabled")
 	}
 
+	// Use unique query params to ensure these URLs haven't been cached
+	uniqueId := fmt.Sprintf("%d", time.Now().UnixNano())
 	endpoints := []string{
-		"/api/v1/some-data",
-		"/api/v1/some-data-check1",
-		"/api/v1/some-data-check2",
-		"/api/v1/some-data-check3",
+		"/api/v1/some-data?test=cache_endpoints_" + uniqueId + "_1",
+		"/api/v1/some-data-check1?test=cache_endpoints_" + uniqueId + "_2",
+		"/api/v1/some-data-check2?test=cache_endpoints_" + uniqueId + "_3",
+		"/api/v1/some-data-check3?test=cache_endpoints_" + uniqueId + "_4",
 	}
 
 	// Make first requests to all endpoints (should be cache misses)
