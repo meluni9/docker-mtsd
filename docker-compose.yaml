@@ -4,29 +4,74 @@ networks:
 services:
   balancer:
     build: .
-    command: 'lb'
+    command:
+      [
+        'lb',
+        '--trace=true',
+        '--rate-limit=true',
+        '--rate-limit-requests=50',
+        '--cache=true',
+        '--cache-ttl=5m',
+      ]
     networks:
       - servers
     ports:
       - '8090:8090'
+    environment:
+      - LOG_LEVEL=info
 
   server1:
     build: .
+    command: ['server', '--port=8080']
     networks:
       - servers
     ports:
       - '8080:8080'
+    environment:
+      - CONF_RESPONSE_DELAY_SEC=0
 
   server2:
     build: .
+    command: ['server', '--port=8080']
     networks:
       - servers
     ports:
       - '8081:8080'
+    environment:
+      - CONF_RESPONSE_DELAY_SEC=0
 
   server3:
     build: .
+    command: ['server', '--port=8080']
     networks:
       - servers
     ports:
       - '8082:8080'
+    environment:
+      - CONF_RESPONSE_DELAY_SEC=0
+
+  # Optional: monitoring and testing services
+  client:
+    build: .
+    command: ['client', '--target=http://balancer:8090']
+    networks:
+      - servers
+    depends_on:
+      - balancer
+      - server1
+      - server2
+      - server3
+    profiles:
+      - testing
+
+  stats:
+    build: .
+    command: ['stats']
+    networks:
+      - servers
+    depends_on:
+      - server1
+      - server2
+      - server3
+    profiles:
+      - monitoring
